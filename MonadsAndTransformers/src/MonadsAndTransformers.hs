@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE FlexibleInstances #-}
 -- {-# LANGUAGE InstanceSigs      #-}
 {-# LANGUAGE KindSignatures    #-}
@@ -131,7 +132,8 @@ does it have this kind?
 
 data MyList a
     = MyNil
-    | MCons a (MyList a)
+    | MyCons a (MyList a)
+    deriving (Show, Functor)
 
 {-|
 It has kind @* -> *@ because the type parameter @a@ must be a monotype in order to be representable
@@ -183,6 +185,12 @@ instance MySum Bool where
     (<+>) True False  = True
     (<+>) False True  = True
     (<+>) True True   = True
+
+{- | Finally, note that every instance of a type class /must/ define some operations. These
+operations constitute what is known as the /minimum complete definition/ of a type class.
+There may be additional operations that the instance may or may not define, but if the
+instance does provide the minimum complete definition, then it is considered invalid.
+-}
 
 {- | Question 3.1: Define a @String@ instance of the @MySum@ type class and explain why
 you have defined it this way.
@@ -329,15 +337,17 @@ Since maps are most commonly seen in the context of lists, let us start off by c
 -}
 
 -- | 5.1: As a warm up, define @Show@ and @Eq@ instances for @MyList@.
-instance (Show a) => Show (MyList a) where
-    show = undefined
+
+-- instance (Show a) => Show (MyList a) where
+--     show = undefined
 
 instance (Eq a) => Eq (MyList a) where
     (==) xs ys = undefined
 
 -- | 5.2: Define a @Functor@ instance for @MyList@.
-instance Functor MyList where
-    fmap = undefined
+
+-- instance Functor MyList where
+--     fmap = undefined
 
 {- | 5.3: Compare the instance definitions for @Show@ and @Eq@ with @Functor@. For some reason,
 we define the @Functor@ instance for @MyList@ and /not/ @MyList a@. Intuitively, this makes
@@ -354,6 +364,7 @@ paragraph above?
 -}
 
 -- | 5.5  Consider the following type, isometric to the @Either@ type in Haskell:
+
 data MyEither a b
     = MyLeft a
     | MyRight b
@@ -367,6 +378,7 @@ https://en.wikipedia.org/wiki/Result_type
 Now that you have a better understanding of how this type might be used, can you define a
 @Functor@ instance for @MyEither@?
 -}
+
 instance Functor (MyEither a) where
     fmap = undefined
 
@@ -408,21 +420,21 @@ the function /itself/ is embedded in the same structure.
 Make sure to define the type signatures of the functions. We have enabled the
 @InstanceSigs@ pragma for this purpose.
 -}
+
 instance Functor Option where
     fmap = undefined
-
 
 instance Applicative Option where
     pure = undefined
 
     (<*>) = undefined
 
-
 {- | 6.3: Here's a small application of the @Applicative@ instance of the @Option@ type:
 
 Suppose we have 2 computations that return an @Option@ value, and we would like to put these
 values into pairs. The naive way to do this is as follows:
 -}
+
 optionsToPairNaive :: Option a -> Option b -> Option (a, b)
 optionsToPairNaive ma mb = case (ma, mb) of
     (Some a, Some b) -> Some (a, b)
@@ -431,6 +443,7 @@ optionsToPairNaive ma mb = case (ma, mb) of
 -- | 6.3.1: Explain why the return type of @optionsToPairNaive@ is @Option (a, b)@ and not @(a,b)@
 
 -- | 6.3.2: How would you implement the following function:
+
 secretFunction :: (Applicative f)
                => (a -> b -> c)
                -> f a
@@ -449,6 +462,7 @@ optionsToPairApplicative ma mb = undefined
 lies in the fact that this pattern can be extended indefinitely. On that note, could
 you define the following function?
 -}
+
 secretFunctionLift4 :: (Applicative f)
                     => (a1 -> a2 -> a3 -> a4 -> r)
                     -> f a1
@@ -504,6 +518,289 @@ CIS194 spends two exercises going over applicative parsers.
 
 {- | 7. Monad -}
 
+{- | Finally, we arrive at the most ubiquitously used (and possibly abused) type class in
+Haskell: @Monad@.
+
+The theoretical grounding of @Monad@ is to be found in category theory, and if you are so
+interested, you can spend some time reading up on it. For our purposes though, we will jump
+straight into the definitions and applications in a Haskell context.
+
+As should be reflex by now, we start off by taking a look at the hackage documentation of
+@Monad@:
+https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#t:Monad
+
+The key take points to note in this regard are:
+
+(1) @Monad@ instances must define two operations: the return operation and the bind operation.
+(a) The @return@ operation corresponds to the pure operation in @Applicative@-- it enables values to
+be inserted into a monadic context (more on what these means later).
+(b) The bind operation (@>>=@) takes a haskell value out of a monadic context and applies a
+function to this value. Note that this function performs some computation and raises the result
+back into the monadic context.
+
+(2) @Monad@ instances should adhere to the monadic identity and monadic associativity laws
+(see documentation for details). In addition, since @Monad@ instances must also be @Applicative@
+instances, the instances should relate as follows:
+(a) @pure = return@
+(b) @ m1 <*> m2 = m1 >>= (\f -> m2 >>= (\v -> return $ f v))
+
+Take some time to see why these two relations should hold
+
+Okay, so we now have an abstract understanding of @Monad@. But why define this type class at all?
+Let us start off by considering the following example:
+
+We first define another @Person@ record type to represent all the data that a data base might
+have for some person:
+-}
+data Person = Person
+    { personName   :: !String
+    , personAge    :: !Int
+    , personHeight :: !Double
+    , personWeight :: !Double
+    } deriving (Show, Eq)
+
+{- | We now define a function @constructPerson@ that receives the name, age, height, and weight
+data as @Option@ values. In reality, since these values would be read from a DB, they would be
+available only in the @IO@ context. However, for the sake of this example, let us assume that
+the @Maybe@ values represent two possibilities:
+
+(a) The @Some@ value represents a successfully retrieved data point
+(b) The @None@ value represents either a @NULL@ value in the DB, or a failure to read and
+parse the data from the DB.
+-}
+
+constructPerson :: Option String -> Option Int -> Option Double -> Option Double -> Option Person
+constructPerson oName oAge oHeight oWeight =
+    case oName of
+        None -> None
+        Some name ->
+            case oAge of
+                None -> None
+                Some age ->
+                    case oHeight of
+                        None -> None
+                        Some height ->
+                            case oWeight of
+                                None -> None
+                                Some weight ->
+                                    Some $ Person name age height weight
+
+{- | It goes without saying that @constructPerson@ is quite verbose. Furthermore, we see the
+same pattern being repeated for each of the option values: if the @Option@ value is a @None@,
+then we return a @None@ for the entire computation; otherwise, we proceed to the next @Option@
+value.
+
+This is where @Monad@ comes to the rescue. Let us first define a @Monad@ instance for @Option@:
+-}
+
+instance Monad Option where
+    return = pure
+
+    (>>=) None f     = None
+    (>>=) (Some v) f = f v
+
+-- | 7.1: Can you define a @constructPersonWithMonad@ that makes use of the @(>>=)@ operator?
+
+constructPersonWithMonad :: Option String -> Option Int -> Option Double -> Option Double -> Option Person
+constructPersonWithMonad oName oAge oHeight oWeight = undefined
+
+{- | If you successfully answer 7.1, you will start to see the advantage of @Monad@. In this case,
+it allowed us to /abstract out/ the following pattern commonly seen in computations involving
+@Option@ values:
+
+if the value is a @None@, then the entire computation ends (short-circuits); otherwise, the
+computation proceeds with the value wrapped in the @Some@ constructor.
+
+However, even @constructPersonWithMonad@ is slightly verbose and difficult to read because of
+the bind operator. This issue can be mitigated by using the @do@ notation. The @do@ notation
+provides convenient syntactic sugar for the monadic operations. Specifically for the bind
+operator:
+
+@
+...
+mv >>= (\v -> ... -- do something with v to compute r
+              return r -- return some result r computed during the computation)
+...
+@
+
+can be written in @do@ notation as:
+@
+...
+  do
+ v <- mv
+ ... -- do something with v to compute r
+ return r
+...
+@
+
+For more on the @do@ notation, see:
+
+https://en.wikibooks.org/wiki/Haskell/do_notation
+-}
+
+{- | 7.2: Define a function @constructPersonWithDo@ that makes use of the @do@ notation to
+simplify 7.1:
+-}
+
+constructPersonWithDo ::  Option String -> Option Int -> Option Double -> Option Double -> Option Person
+constructPersonWithDo oName oAge oHeight oWeight = undefined
+
+{- | 7.3.1: Define @Applicative@ and @Monad@ instances of @MyList@. Avoid using list comprehension
+syntax for this question. [Hint: You might find it useful to define an append function for
+@MyList@ values.]
+-}
+instance Applicative MyList where
+    pure x = MyCons x MyNil
+
+    (<*>) fs xs = crossProductAndApply fs xs
+      where
+        crossProductAndApply :: MyList (a -> b) -> MyList a -> MyList b
+        crossProductAndApply MyNil xs      = MyNil
+        crossProductAndApply (MyCons f fs') xs = fmap f xs <++> crossProductAndApply fs' xs
+
+appendMyLists :: MyList a -> MyList a -> MyList a
+appendMyLists MyNil ys           = ys
+appendMyLists (MyCons x xs' ) ys = MyCons x (appendMyLists xs' ys)
+
+(<++>) = appendMyLists
+
+instance Monad MyList where
+    return = pure
+
+    (>>=) MyNil amb          = MyNil
+    (>>=) (MyCons x xs') amb = amb x <++> (xs' >>= amb)
+
+{- | 7.3.2: Now think about how you would define the the @<*>@ for @MyList@ using list
+comprehension and the do-notation
+-}
+
+myListApplicativeWithListComp :: MyList (a -> b) -> MyList a -> MyList b
+myListApplicativeWithListComp = undefined
+
+myListApplicativeWithDoNotation :: MyList (a -> b) -> MyList a -> MyList b
+myListApplicativeWithDoNotation = undefined
+
+{- | 7.3.3: Do you see the similarity between the list comprehension and the do notation
+solutions?
+-}
+
+{- | So far, we have covered:
+
+(1) The minimum complete definition of @Monad@
+(2) The properties these definitions must adhere to vis-a-vis identity, associativity, and @Applicative@
+(3) The utility of @Monad@ in abstracting commonly occuring patterns in computations
+
+There is, however, more to @Monad@ than this. To understand this next aspect of @Monad@, however,
+we first need to digress a bit and consider the topics of side-effects and
+@IO@.
+
+Generally speaking, for any programming language to be really useful in a software engineering
+context, it needs to support side-effects. Side-effects refer to computations that occur
+/outside/ the context of a program's runtime environment. Examples of effectful computations
+include printing to the console, querying a database, reading from and writing to files etc.
+
+Since effectful computations take place /outside/ the runtime environment of the program,
+the programming language cannot provide any guarantees about the success of these
+computations. Thus consider, for example, the following OCaml program:
+
+@
+foo :: Int -> Int
+let foo x = printf ("%d", x) ; x + 1
+@
+
+This program prints the integer it receives, and then returns the successor of the integer.
+However, there is no guarantee that @foo@ will execute as expected and always return the
+successor of the integer it is passed. This is because it must first print the integer to
+console-- this is a side-effect outside the runtime environment of the program, and might
+very well fail.
+
+In computer science parlance, we thus say that @foo@ is not referentially transparent. Let
+us take a moment to consider the definition of referential transparency from the Haskell
+wiki:
+
+"While there is no single formal definition[1], it usually means that an expression always
+evaluates to the same result in any context."
+
+Thus, since
+(a) @foo@ has a side-effect that is outside the OCaml runtime context, and
+(b) we cannot therefore guarantee that it will /always/ evaluate to the same value,
+we therefore say @foo@ is not referentially transparent.
+
+Haskell, however, provides /both/ effectful computations and referential transparency. It
+does so by separating pure Haskell /values/ from effectful /actions/ (like printing to
+console). Haskell then defines an ADT (Abstract Data Type) called @IO@ to represent these
+actions (see: https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#t:IO).
+
+Note that the @IO@ type has kind @* -> *@. This enables programmers to specify actions which
+evaluate to some value a type that is passed as an argument to @IO@. Thus, for example,
+@IO String@ representing an action that evaluates to a string.
+
+So we now understand the distinction that Haskell draws between values and actions, and the
+ADT used to represent the latter. But what does it really mean for a Haskell expression to
+have the @IO@ type? Let us understand this by considering the @getChar@ function in the
+Haskell base library. This function has type:
+
+@
+λ> :t getChar
+getChar :: IO Char
+@
+
+The @IO Char@ type can be thought of as a /representation/ of the actual action of fetching
+a character from @stdin@. This is Haskell's way of saying: we know that this computation
+results in a @Char@ value, but we don't actually perform it (since it is performed outside
+the runtime environment). Thus, we will /represent/ this action using the @IO@ context. This is
+the key point to note for @IO@.
+
+The following metaphor also tends to be helpful in understanding @IO@:
+Consider a recipe to bake a cake. It outlines how one bakes a cake, and the end results.
+However, the recipe itself does not bake the cake. In this sense, the recipe thus /represents/
+the baking of the cake, and is not the baking of the cake itself. Likewise, @IO Char@ can be
+thought of as a recipe to fetch a character from @stdin@.
+
+So what happens when I follow this recipe and attempt to bake the cake, but my oven
+malfunctions halfway through? My /action/ to bake the cake has clearly failed. But this
+failed /action/ is still represented by the recipe, because I followed the recipe. Likewise,
+my actions of messing up the proprtions of the ingredients, or setting the oven to the wrong
+temperature are still represented by the same recipe, /even if/ the resultant overly sweet
+or burned cake is not what I was hoping to get. The key point to note here is that even the
+possibilities of failure in the baking process are /implicitly/ represented by the recipe.
+
+
+-}
+
+
+-- | We can better understand this by writing @foo@ in Haskell:
+fooHaskell :: Int -> IO Int
+fooHaskell x = print x >> return (x + 1)
+
+{-|
+We observe the following about @fooHaskell@:
+(1) It's return type is @IO Int@ and /not/ @IO@
+(2) We use the @>>@ operator (see https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#v:-62--62-)
+thus implying that @IO@ is a @Monad@.
+
+Let us consider (1) first. This implies that @fooHaskell@ takes an @Int@ as input and
+eventually returns an @Int@ as well. However, somewhere in @fooHaskell@, an effectful computation/
+action is performed, which may or may not succeed. Thus, the rest of the program gets
+"infected" with the action, since whether or not the remaining computations are performed
+depends on the success/failure of this action. Thus, the @Int@ value that is eventually
+returned can only be specified in the @IO@ context.
+
+The @IO Int@ type is thus Haskell's way of saying: look, you've specified some action in your
+program for which I can't give any guarantees, so whatever value you choose to return must be
+placed in the @IO@ context. This is my way of saying
+
+
+-}
+
+
+
+
+
+
+
+
+
 {- | 8. Reader -}
 
 -- newtype MyReader r a = MyReader { unMyReader :: r -> a }
@@ -528,161 +825,3 @@ CIS194 spends two exercises going over applicative parsers.
 {- | 11. ReaderT -}
 
 {- | 12. State and StateT -}
-
-
-
-
-data Tree a
-    = Leaf
-    | Node (Tree a) a (Tree a)
-
-{-
-λ> :k Tree
-Tree :: * -> *
-λ> :t Leaf
-Leaf :: Tree a
-λ> :t Node
-Node :: Tree a -> a -> Tree a -> Tree a
-λ>
--}
-
--- data MyEither error success
---     = Left error
---     | Right success
-
-{-
-λ> :k MyEither
-MyEither :: * -> * -> *
-λ> :k (MyEither String)
-(MyEither String) :: * -> *
-λ> :k (MyEither String Int)
-(MyEither String Int) :: *
-λ>
--}
-
--- | Typeclasses
-
--- | Monoids
-
--- | Functor
-
--- instance Functor (MyMaybe) where
---     fmap :: (a -> b) -> MyMaybe a -> MyMaybe b
---     fmap f MyNothing  = MyNothing
---     fmap f (MyJust a) = MyJust $ f a
-
--- data MyEither a b
---     = MyLeft a
---     | MyRight b
---     deriving (Show)
-
--- instance Functor (MyEither String) where
---     fmap :: (a -> b)
---          -> MyEither String a -- f
---          -> MyEither String b -- (MyRight a)
---     fmap f (MyLeft str) = MyLeft str
---     fmap f (MyRight a)  = MyRight $ f a
-
--- foo :: (Int -> Int) -> Either String Int -> Either String Int
--- foo f (Left str) = Left str
--- foo f (Right x)  = Right $ f x
-
--- foo' :: (Int -> Int) -> Either String Int -> Either String Int
--- foo' = fmap
-
-
--- -- | Type wrapping a function that reads from a fixed environment
--- -- newtype MyReader r a = MyReader { unMyReader :: r -> a }
-
-
-
--- -- | Functor
--- -- instance Functor (MyReader r) where
--- --    fmap :: (a -> b) -> MyReader r a -> MyReader r b
--- --    fmap f (MyReader ra) =
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
--- -- | Functor: What does this intuitively mean?
--- -- instance Functor (MyReader r) where
--- --   fmap :: (a -> b) -> MyReader r a -> MyReader r b
--- --   fmap f (MyReader ra) = MyReader $ f . ra
-
--- -- -- | Applicative: What does intuitively mean?
--- -- instance Applicative (MyReader r) where
--- --   pure :: a -> MyReader r a
--- --   pure a = MyReader $ const a
-
--- --   (<*>) :: MyReader r (a -> b) -> MyReader r a -> MyReader r b
--- --   (<*>) (MyReader rab) (MyReader ra) = MyReader $ \r -> rab r $ ra r
-
--- -- -- | Monad: What does intuitively mean?
--- -- instance Monad (MyReader r) where
--- --   return :: a -> MyReader r a
--- --   return = pure
-
--- --   (>>=) :: MyReader r a -> (a -> MyReader r b) -> MyReader r b
--- --   (>>=) (MyReader ra) farb = MyReader $
--- --       \r -> let MyReader rb = farb $ ra r -- observe how the environment is threaded
--- --             in rb r
-
--- -- -- | Digression into composing types
--- -- newtype Compose f g a = Compose (f (g a)) deriving Show
-
--- -- -- | Some generic types
--- -- newtype T1 a = T1 { unT1 :: a } deriving Show
-
--- -- instance Functor T1 where
--- --   fmap :: (a -> b) -> T1 a -> T1 b
--- --   fmap f (T1 a) = T1 $ f a
-
--- -- instance Applicative T1 where
--- --   pure :: a -> T1 a
--- --   pure a = T1 $ a
-
--- --   (<*>) :: T1 (a -> b)
-
--- -- newtype T2 a = T2 { unT2 :: a } deriving Show
