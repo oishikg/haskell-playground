@@ -646,17 +646,12 @@ constructPersonWithDo ::  Option String -> Option Int -> Option Double -> Option
 constructPersonWithDo oName oAge oHeight oWeight = undefined
 
 {- | 7.3.1: Define @Applicative@ and @Monad@ instances of @MyList@. Avoid using list comprehension
-syntax for this question. [Hint: You might find it useful to define an append function for
-@MyList@ values.]
+syntax for this question. [Hint: You might find the @<++>@ operator useful]
 -}
 instance Applicative MyList where
-    pure x = MyCons x MyNil
+    pure = undefined
 
-    (<*>) fs xs = crossProductAndApply fs xs
-      where
-        crossProductAndApply :: MyList (a -> b) -> MyList a -> MyList b
-        crossProductAndApply MyNil xs      = MyNil
-        crossProductAndApply (MyCons f fs') xs = fmap f xs <++> crossProductAndApply fs' xs
+    (<*>) = undefined
 
 appendMyLists :: MyList a -> MyList a -> MyList a
 appendMyLists MyNil ys           = ys
@@ -727,16 +722,16 @@ Thus, since
 we therefore say @foo@ is not referentially transparent.
 
 Haskell, however, provides /both/ effectful computations and referential transparency. It
-does so by separating pure Haskell /values/ from effectful /actions/ (like printing to
-console). Haskell then defines an ADT (Abstract Data Type) called @IO@ to represent these
-actions (see: https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#t:IO).
+does so by differentiating pure Haskell /values/ from effectful /actions/ (like printing to
+console). THe latter are represented as an ADT (Abstract Data Type) called @IO@
+(see: https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#t:IO).
 
 Note that the @IO@ type has kind @* -> *@. This enables programmers to specify actions which
 evaluate to some value a type that is passed as an argument to @IO@. Thus, for example,
-@IO String@ representing an action that evaluates to a string.
+@IO String@ represents an action that evaluates to a string.
 
-So we now understand the distinction that Haskell draws between values and actions, and the
-ADT used to represent the latter. But what does it really mean for a Haskell expression to
+So we now understand the distinction that Haskell draws between values and actions, and that an
+ADT id used to represent the latter. But what does it really mean for a Haskell expression to
 have the @IO@ type? Let us understand this by considering the @getChar@ function in the
 Haskell base library. This function has type:
 
@@ -765,58 +760,83 @@ temperature are still represented by the same recipe, /even if/ the resultant ov
 or burned cake is not what I was hoping to get. The key point to note here is that even the
 possibilities of failure in the baking process are /implicitly/ represented by the recipe.
 
+Likewise with the @IO@ type-- the possibilities of failures occuring outside the Haskell
+runtime environment are also implicity represented by @IO@. Thus, @getChar@ will have type
+@IO Char@ in /all contexts/, since the possibilities of failure outside the Hasklel runtime
+context are also reprented by the type @IO Char@. This is precisely how Haskell preserves
+referential transparency while also allowing for effectful computations.
 
+With a somewhat intuitive understanding of @IO@, we are now in a position to understand how
+it relates to @Monad@. @IO@ provides an ADT to /define/ effectful computations in Haskell.
+However, if we actually want to use an effectful computation, like the @getChar@ computation,
+in our Haskell code, we need some way to actually use the value that is obtained from the
+effectful computation (if the computation is successful). Haskell idiomatically makes use
+of the @Monad@ pattern to do so.
+
+Haskell does so because the @Monad@ operations perfectly fit the requirements of an @IO@
+computation. We need some way to "get" the value of the @IO@ computation and perform
+further operations on it. The issue is, the moment we invoke an @IO@ computation in our code,
+the rest of the code gets "infected" by the @IO@ context. That is, the result of all following
+computations must also be contained in the @IO@ context, to account for the possibility of
+failure in the actual @IO@ operation itself. So if we have some @IO@ computation of type
+@IO a@, and we want to perform further computations on the value of type @a@, the result
+of these computations (of type @b@, let's say) must be in the @IO@ context. Consequently,
+the type of the function that performs these computations would be @a -> IO b@.
+
+Now consider the type of the monadic bind operator:
+
+@
+(>>=) :: m a -> (a -> m b) -> m b
+@
+
+Substituting @IO@ for @m@, we get:
+
+@
+(>>=) :: IO a -> (a -> IO b) -> IO b
+@
+
+The monadic bind operator for @IO@ is thus exactly what we need! With it, we can perform a
+computation on the value contained in the @IO@ context. Thus, for instance, if I wanted to
+get a character from @stdin@ and then check if it is the character 'a', I would do so as
+follows:
 -}
 
+isCharA :: IO Bool
+isCharA = getChar >>= (\ch -> pure $ ch == 'a')
 
--- | We can better understand this by writing @foo@ in Haskell:
+{-| 7.4: Note how the result of the computation to check if the character is 'a' is "pure"-ed.
+Can you explain why we have to do this?
+-}
+
+{-| The power of @Monad@ for @IO@ is that we can perform as many computations as we want
+in sequence. Thus, if we wanted to define a function that did the following:
+(1) Read a charcter from @stdin@
+(2) Check if it is the character 'a'
+(3) If it is 'a', print "It's an A! :D", otherwise print, "Oh no, it's not an A! :("
+
+we would do so as follows:
+-}
+respondToCharInput :: IO ()
+respondToCharInput = getChar >>= checkIfA >>= printResponse
+  where
+    checkIfA :: Char -> IO Bool
+    checkIfA ch = pure $ ch == 'a'
+
+    printResponse :: Bool -> IO ()
+    printResponse bv = print $ if bv then "It's an A! :D" else "Oh no, it's not an A! :("
+
+-- | 7.5: Implement @foo@ in Haskell using @IO@'s @Monad@ operations
 fooHaskell :: Int -> IO Int
-fooHaskell x = print x >> return (x + 1)
+fooHaskell = undefined
 
-{-|
-We observe the following about @fooHaskell@:
-(1) It's return type is @IO Int@ and /not/ @IO@
-(2) We use the @>>@ operator (see https://hackage.haskell.org/package/base-4.14.1.0/docs/Prelude.html#v:-62--62-)
-thus implying that @IO@ is a @Monad@.
-
-Let us consider (1) first. This implies that @fooHaskell@ takes an @Int@ as input and
-eventually returns an @Int@ as well. However, somewhere in @fooHaskell@, an effectful computation/
-action is performed, which may or may not succeed. Thus, the rest of the program gets
-"infected" with the action, since whether or not the remaining computations are performed
-depends on the success/failure of this action. Thus, the @Int@ value that is eventually
-returned can only be specified in the @IO@ context.
-
-The @IO Int@ type is thus Haskell's way of saying: look, you've specified some action in your
-program for which I can't give any guarantees, so whatever value you choose to return must be
-placed in the @IO@ context. This is my way of saying
-
-
+{-| We have thus covered:
+(1) The definition of @Monad@
+(2) The ADT @IO@ and it's utility in maintaining referential transperancy in Haskell
+(3) The uses of @Monad@ in (a) abstracting common programming patterns, and (b) providing the
+required pattern to deal with @IO@ computations
 -}
-
-
-
-
-
-
-
-
 
 {- | 8. Reader -}
-
--- newtype MyReader r a = MyReader { unMyReader :: r -> a }
-
--- instance Functor (MyReader r) where
---     fmap :: (a -> b) -> MyReader r a -> MyReader r b
---     fmap f (MyReader ra) = MyReader $ f . ra
-
--- instance Applicative (MyReader r) where
---     pure :: a -> MyReader r a
---     pure = MyReader . const
-
---     (<*>) :: MyReader r (a -> b) -> MyReader r a -> MyReader r b
---     (<*>) (MyReader rab) (MyReader ra) = MyReader $ \r -> rab r $ ra r
-
-
 
 {- | 9. Nesting functors and applicatives -}
 
