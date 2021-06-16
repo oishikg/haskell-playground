@@ -1,5 +1,8 @@
 {-# LANGUAGE DeriveFunctor     #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE InstanceSigs      #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE RecordWildCards   #-}
 -- {-# LANGUAGE InstanceSigs      #-}
 {-# LANGUAGE KindSignatures    #-}
 module MonadsAndTransformers
@@ -449,13 +452,13 @@ secretFunction :: (Applicative f)
                -> f a
                -> f b
                -> f c
-secretFunction abc fa fb = undefined
+secretFunction abc fa fb = abc <$> fa <*> fb
 
 {- | 6.3.3: Can you implement @optionsToPairApplicative@, a function that uses @secretFunction@
 the @Applicative@ structure of @Option@ to implement a one line solution for our problem.
 -}
 optionsToPairApplicative :: Option a -> Option b -> Option (a, b)
-optionsToPairApplicative ma mb = undefined
+optionsToPairApplicative ma mb = (,) <$> ma <*> mb
 
 {- | 6.4: The @secretFunction@ you just implemented is /lifting/ the function with type signature
 @a -> b -> c@ into the computations represented by @f a@ and @f b@. The power applicative
@@ -602,7 +605,8 @@ instance Monad Option where
 -- | 7.1: Can you define a @constructPersonWithMonad@ that makes use of the @(>>=)@ operator?
 
 constructPersonWithMonad :: Option String -> Option Int -> Option Double -> Option Double -> Option Person
-constructPersonWithMonad oName oAge oHeight oWeight = undefined
+constructPersonWithMonad oName oAge oHeight oWeight =
+  oName >>= (\name -> oAge >>= (\age -> oHeight >>= (\height -> oWeight >>= (\weight -> return $ Person name age height weight))))
 
 {- | If you successfully answer 7.1, you will start to see the advantage of @Monad@. In this case,
 it allowed us to /abstract out/ the following pattern commonly seen in computations involving
@@ -638,12 +642,43 @@ For more on the @do@ notation, see:
 https://en.wikibooks.org/wiki/Haskell/do_notation
 -}
 
+-- mv :: m a
+-- mu :: m b
+
+-- m (a, b)
+
+-- foo mv mu = mv >>= (\v -> mu >>= (\u -> return (v, u)))
+
+-- foo2 mv1 mv2 mv3 mv4 .... = mv1 >>= (\v1 -> mv2 >>= (\v2 -> mv3 >>= (\v3 -> mv4 >>= (\v4 -> ...))))
+
+-- foo2Do mv1 mv2 mv3 mv4 .... = do
+--   v1 <- mv1
+--   v2 <- mv2
+--   v3 <- mv3
+--   v4 <- mv4
+--   ...)
+
+
+-- fooDo mv mu = do
+--    v <- mv
+--    u <- mu
+--    return (v, u)
+
+
+
+
 {- | 7.2: Define a function @constructPersonWithDo@ that makes use of the @do@ notation to
 simplify 7.1:
 -}
 
 constructPersonWithDo ::  Option String -> Option Int -> Option Double -> Option Double -> Option Person
-constructPersonWithDo oName oAge oHeight oWeight = undefined
+constructPersonWithDo oName oAge oHeight oWeight = do
+    personName <- oName
+    personAge <- oAge
+    personHeight <- oHeight
+    personWeight <- oWeight
+    return Person {..}
+
 
 {- | 7.3.1: Define @Applicative@ and @Monad@ instances of @MyList@. Avoid using list comprehension
 syntax for this question. [Hint: You might find the @<++>@ operator useful]
@@ -836,7 +871,113 @@ fooHaskell = undefined
 required pattern to deal with @IO@ computations
 -}
 
-{- | 8. Reader -}
+{- | 8. Reader and ReaderT -}
+
+{- | With a general understanding of @Monad@ and @IO@ behind us, we are in a position to explore intermediate
+Haskell concepts. We start this exploration with @Reader@
+
+Let us first define a type alias to the @Reader@ type, @MyReader@
+-}
+newtype MyReader r a = MyReader { runMyReader :: r -> a }
+
+{-| @MyReader@ is thus a @newtype@ wrapper around a function that takes a value of type @r@ and returns a value
+of type @a@. It might not straightaway be clear why we would define the type in this manner, so let us
+take some time playing around with and exploring the type.
+
+As usual, let us start by defining the @Functor@ instance:
+-}
+instance Functor (MyReader r) where
+    fmap :: (a -> b) -> MyReader r a -> MyReader r b
+    fmap f (MyReader ra) = MyReader $ f . ra
+
+instance Applicative (MyReader r) where
+    pure :: a -> MyReader r a
+    pure val = MyReader $ const val
+
+    (<*>) :: MyReader r (a -> b) -> MyReader r a -> MyReader r b
+    (<*>) (MyReader rab) (MyReader ra) = MyReader $ \r -> rab r (ra r)
+
+instance Monad (MyReader r) where
+    return :: a -> MyReader r a
+    return = pure
+
+    (>>=) :: MyReader r a -> (a -> MyReader r b) -> MyReader r b
+    (>>=) (MyReader ra) arb = MyReader (\r ->  let a = ra r
+                                                   rb = arb a
+                                               in runMyReader rb r)
+
+-- | To retrieve the environment
+askMyReader :: MyReader r r
+askMyReader = MyReader id
+
+-- | To modify the environment, and then pass the modified environment to the reader computation
+localMyReader :: (r -> r) -> MyReader r a -> MyReader r a
+localMyReader modifyEnv (MyReader ra) = MyReader $ \r -> ra (modifyEnv r)
+
+-- | Experiments
+data SomeEnv = SomeEnv
+    { sdgToInr :: !Int
+    , sdgToEur :: !Int
+    , sdgToUsd :: !Int
+    } deriving (Show, Eq)
+
+ourEnv :: SomeEnv
+ourEnv = SomeEnv
+    { sdgToInr = 50
+    , sdgToEur = 3
+    , sdgToUsd = 2
+    }
+
+someReaderComputation :: Int -> MyReader SomeEnv Int
+someReaderComputation stockPrice = do
+    env <- askMyReader
+    let priceInInr = stockPrice * 4 * sdgToInr env
+    return priceInInr
+
+-- -- Undo the do-notation
+-- someReaderComputation' :: Int -> MyReader SomeEnv Int
+-- someReaderComputation' stockPrice =
+--     askMyReader >>= (\env -> return $ stockPrice * 4 * sdgToInr env)
+
+-- -- Inline the bind oeprator
+-- someReaderComputation'' :: Int -> MyReader SomeEnv Int
+-- someReaderComputation'' stockPrice =
+--     MyReader $ \env -> let a = runMyReader askMyReader env
+--                            rb = (\env -> return $ stockPrice * 4 * sdgToInr env) a
+--                        in runMyReader rb env
+
+anotherReaderComputation :: Int -> MyReader SomeEnv Int
+anotherReaderComputation stockPrice = do
+    env <- askMyReader
+    let priceInUsd = stockPrice * 4 * sdgToUsd env
+    return priceInUsd
+
+putThoseReaderComputationsTogether :: Int -> MyReader SomeEnv (Int, Int)
+putThoseReaderComputationsTogether stockPrice = do
+   somePrice <- someReaderComputation stockPrice
+   anotherPrice <- anotherReaderComputation stockPrice
+   return (somePrice, anotherPrice)
+
+putThoseReaderComputationsTogether' :: Int -> MyReader SomeEnv (Int, Int)
+putThoseReaderComputationsTogether' stockPrice =
+    someReaderComputation stockPrice >>= (\somePrice -> anotherReaderComputation stockPrice >>= (\anotherPrice -> pure (somePrice, anotherPrice)))
+
+
+runReaderComputation :: MyReader SomeEnv (Int, Int) -> (Int, Int)
+runReaderComputation action = runMyReader action ourEnv
+
+data MyEnum
+    = P1
+    | P2
+    | P3
+
+x :: String
+x = "\""
+
+
+
+
+
 
 {- | 9. Nesting functors and applicatives -}
 
