@@ -47,7 +47,7 @@ build-type:          Simple
 library
   -- Modules exported by the library.
   exposed-modules:
-    ExploringServant
+    ExploringServantDemo
     TypeFamilies
 
   -- Modules included in this library but not exported.
