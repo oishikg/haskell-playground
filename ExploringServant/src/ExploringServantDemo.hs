@@ -1,6 +1,6 @@
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE FlexibleInstances   #-}
--- {-# LANGUAGE InstanceSigs        #-}
+{-# LANGUAGE InstanceSigs        #-}
 {-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies        #-}
@@ -85,7 +85,10 @@ I need the following endpoints:
 
 We would then define using our DSL as follows:
 -}
-type MyWebsiteAPI = () -- TODO: define this correctly
+type MyWebsiteAPI =
+    ("my-info" :> Get String)
+    :<|>
+    ("get-time" :> Capture TimeZone :> Get ZonedTime)
 
 {- | Before moving forward, also note that not all statements formed in the DSL represent well-defined APIs
 (even though the statements may be well-kinded). Examples of invalid but well-kinded definition include:
@@ -127,7 +130,9 @@ serve :: HasServer apiLayout
       -> [String] -- ^ Path in HTTP request
       -> IO String -- ^ No output encoding considered for this example
 serve p handler path =
-    undefined
+    case route p handler path of
+        Nothing  -> error "404 error"
+        Just ioA -> ioA
 
 {-| @Server@ type family: this is the key to guaranteeing correct handler types at compile time!
 
@@ -151,20 +156,49 @@ type family Server apiLayout :: *;
 -- | Mapping our DSL type-level constructors to the expected handler type
 
 -- | E.g. @GET@ my information to display on the website
-type instance Server (Get a) = () -- TODO defined correctly
+type instance Server (Get a) = IO a;
 
 -- | E.g. @GET@ my information or @GET@ the current local time
-type instance Server (a :<|> b) = () -- TODO defined correctly
+type instance Server (a :<|> b) = Server a :<|> Server b
 
 -- | E.g. @GET@ information from the endpoint "my-info" :> Get String
-type instance Server ((s :: Symbol) :> b) = () -- TODO defined correctly
+type instance Server ((s :: Symbol) :> b) = Server b
 
 -- | E.g. @GET@ information about the local time from endpoint
 -- "current-local-time" :> Capture TimeZone :> Get ZonedTime
-type instance Server (Capture a :> b) = () -- TODO defined correctly
+type instance Server (Capture a :> b) = a -> Server b
 
 -- | Let's play around with @MyWebsiteAPI@ applying the rules specified by the @Server@ type family to infer
--- its handler type
+-- its handler type:
+-- Server (
+--     ("my-info" :> Get String)
+--     :<|>
+--     ("get-time" :> Capture TimeZone :> Get ZonedTime))
+--
+-- - (Server ("my-info" :> Get String))
+--   :<|>
+--   (Server ("get-time" :> Capture TimeZone :> Get ZonedTime))
+--
+-- - (Server (Get String))
+--   :<|>
+--   (Server (Capture TimeZone :> Get ZonedTime))
+--
+-- - (IO String)
+--   :<|>
+--   (TimeZone -> Server (Get ZonedTime))
+--
+-- - (IO String)
+--   :<|>
+--   (TimeZone -> Server (Get ZonedTime))
+--
+-- - (IO String) :<|> (TimeZone -> IO ZonedTime)
+
+{- | This can also be evaluated on GHCi:
+@@@
+  λ> :kind! (Server MyWebsiteAPI)
+ (Server MyWebsiteAPI) :: * = IO [Char] :<|> (TimeZone -> IO ZonedTime)
+@@@
+-}
 
 -- | What about invalid representations of the API? Compiler error because compiler won't be able to compute
 -- the type the @serve@ function should expect
@@ -212,14 +246,18 @@ class HasServer apiLayout where
 -- assume that the request is valid, and run the handler; in case there are still components that we have
 -- /not/ traversed, then the request is malformed and we return @Nothing@
 instance (Show a) => HasServer (Get a) where
-    -- route :: Proxy (Get a) -> IO a -> [String] -> Maybe (IO String)
-    route _ _ _ = undefined
+    route :: Proxy (Get a) -> IO a -> [String] -> Maybe (IO String)
+    route p handler []        = Just $ fmap show handler
+    route p handler (x : xs') = Nothing
 
 -- | For an API of the form @a :<|> b@, we try out the handler for @a@, and if this fails, then we try
 -- the handler for @b@
 instance (HasServer a, HasServer b) => HasServer (a :<|> b) where
-    -- route :: Proxy (a :<|> b) -> (Server a :<|> Server b) -> [String] -> Maybe (IO String)
-    route _ _ _ = undefined
+    route :: Proxy (a :<|> b) -> (Server a :<|> Server b) -> [String] -> Maybe (IO String)
+    route p (handlerA :<|> handlerB) path =
+       route (Proxy :: Proxy a) handlerA path
+       <|>
+       route (Proxy :: Proxy b) handlerB path
 
 -- | For an API of the form @s :> r@, where @s@ is a type-level string (and not a parameter), we see the real
 -- power of routing an API defined as a Haskell type; the idea is that we want to check, for a given API and
@@ -227,46 +265,55 @@ instance (HasServer a, HasServer b) => HasServer (a :<|> b) where
 -- is the case, we continue to traverse the remaining path with the rest of the API (@r@); if not, the request
 -- is malformed, and we return a @Nothing@ (which would resolve to a 404 error)
 
--- | For example, when suppose we have the API @"info" :> my-info :> Get String@, and the path in the request is
+-- | For example, when suppose we have the API @"info" :> "my-info" :> Get String@, and the path in the request is
 -- ["info", "my-info"]; the @route@ function will recursively traverse the API spec, first matching the type-level
 -- string "info" with the first component of the HTTP request path, and so on and so forth until the @Get@
 -- constructor is reached, at which point the handler is run
 instance (KnownSymbol s, HasServer r) => HasServer ((s :: Symbol) :> r) where
-    -- route :: Proxy (s :> r) -> Server r -> [String] -> Maybe (IO String)
-    route _ _ _ = undefined
+    route :: Proxy (s :> r) -> Server r -> [String] -> Maybe (IO String)
+    route p handler [] = Nothing
+    route p handler (x : xs')
+        | x == symbolVal (Proxy :: Proxy s) =
+            route (Proxy :: Proxy r) handler xs'
+        | otherwise =  Nothing
 
 -- | The last case to consider is similar to the previous case: an API with a parameter that needs to parsed;
 -- in this case, we attempt to parse the current path componenet of the HTTP request, pass it to the handler,
 -- and continue the routing process; however, if the path in the HTTP request is empty, then the request is
 -- once again malformed, and we throw an error
 instance (Read a, HasServer r) => HasServer (Capture a :> r) where
-    -- route :: Proxy (Capture a :> r) -> (a -> Server r) -> [String] -> Maybe (IO String)
-    route _ _ _ = undefined
+    route :: Proxy (Capture a :> r) -> (a -> Server r) -> [String] -> Maybe (IO String)
+    route p handler [] = Nothing
+    route p handler (x : xs') =
+        case readMaybe x of
+            Nothing -> Nothing
+            Just a  -> route (Proxy :: Proxy r) (handler a) xs'
 
 {- | Time to test our server!-}
 
 -- | Let's first define our handlers
+myWebsiteAPIHandler :: Server MyWebsiteAPI
+myWebsiteAPIHandler = getMyInfoHandler :<|> getLocalTimeHandler
+
 getMyInfoHandler :: IO String
-getMyInfoHandler = undefined
+getMyInfoHandler = pure "Some string"
 
 getLocalTimeHandler :: TimeZone -> IO ZonedTime
-getLocalTimeHandler tz = undefined
+getLocalTimeHandler tz = utcToZonedTime tz <$> getCurrentTime
 
-myWebsiteAPIHandler :: Server MyWebsiteAPI
-myWebsiteAPIHandler = undefined
 
 -- | At this point, some of this notation should start looking familiar to the notation you see when
 -- you define APIs in your projects! We simply subsitute the @:<|>@ operator with product types, but the
 -- idea is still the same
 
--- getMyInfoAction :: IO String
--- getMyInfoAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["my-info"]
+getMyInfoAction :: IO String
+getMyInfoAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["my-info"]
 
--- getCurrentTimeUtcAction :: IO String
--- getCurrentTimeUtcAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["current-local-time", "UTC"]
+getCurrentTimeUtcAction :: IO String
+getCurrentTimeUtcAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["get-time", "UTC"]
 
--- getCurrentTimeNycAction :: IO String
--- getCurrentTimeNycAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["current-local-time", "EST"]
+getCurrentTimePdtAction :: IO String
+getCurrentTimePdtAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["get-time", "PDT"]
 
--- malformedRequestAction :: IO String
--- malformedRequestAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["non-existent-path"]
+malformedRequestAction :: IO String
+malformedRequestAction = serve (Proxy :: Proxy MyWebsiteAPI) myWebsiteAPIHandler ["non-existent-path"]
