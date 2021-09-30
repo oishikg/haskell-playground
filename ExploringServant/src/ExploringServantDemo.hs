@@ -46,13 +46,20 @@ and (2) statically verify that the API handlers have the correct type
 
 -}
 
--- | The DSL
+{- | The DSL
+
+Our DSL represents a small subset of all possible API representations. The features are:
+- We only support @GET@ APIs, and do not consider the encoding of the response
+- No request or response bodies are considered
+- No query parameters are considered
+
+-}
 
 -- | Type representing a @GET@ endpoint
--- Limitations: No encoding type (use @String@); can be extended by adding parameters to the type constructor
 data Get (a :: *)
 
--- | Type representing a choice between two routes
+-- | Type representing a choice between two routes; note that this type has a data constructor that is isomorphic
+-- to (,)
 data a :<|> b = a :<|> b
 infixr 8 :<|>
 
@@ -87,6 +94,7 @@ type OnlyPath = "path"
 
 type OnlyCapture = Capture Bool
 
+
 {- | These types do not cause compilation errors, but cannot be interpreted. As it turns out, there are 4 DSL
 patterns that are considered valid:
 
@@ -95,13 +103,15 @@ patterns that are considered valid:
 (3) @(s : Symbol) :> r@, where @r@ is a pattern consisting of the 4 valid patterns and terminates with a @Get a@
 (4) @Capture s :> r@, where @r@ is a pattern consisting of the 4 valid patterns and terminates with a @Get a@
 
+Note that 3 and 4 are enforced by the type definition itself; why?
+-}
 
-Finally, two questions at this point:
+{- | Finally, two questions at this point:
   - Why define a DSL at all for this?
   - Why define a type-level DSL for this?
 
 These will become clearer once we interpret the API spec
--}
+--}
 
 {- | Interpreting APIs defined in our DSL as a server
 
