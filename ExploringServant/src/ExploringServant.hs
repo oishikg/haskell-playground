@@ -57,6 +57,7 @@ data a :<|> b = a :<|> b
 infixr 8 :<|>
 
 -- | Type representing a nested route: @a@ -> first component of path, @b@ -> rest of the path
+-- Question: why use @k@ instead of @*@?
 data (a :: k) :> (b :: *)
 infixr 9 :>
 
@@ -82,25 +83,48 @@ type MyWebsiteAPI =
     :<|>
     "current-local-time" :> Capture TimeZone :> Get ZonedTime
 
-{- | Two questions at this point:
+{- | Before moving forward, also note that not all statements formed in the DSL represent well-defined APIs
+(even though the statements may be well-kinded). Examples of invalid but well-kinded definition include:
+-}
+type OnlyPath = "path"
+
+type OnlyCapture = Capture Bool
+
+{- | These types do not cause compilation errors, but cannot be interpreted. As it turns out, there are 4 DSL
+patterns that are considered valid:
+
+(1) @Get a@
+(2) @a :<|> b@
+(3) @(s : Symbol) :> r@, where @r@ is a pattern consisting of the 4 valid patterns and terminates with a @Get a@
+(4) @Capture s :> r@, where @r@ is a pattern consisting of the 4 valid patterns and terminates with a @Get a@
+
+
+Finally, two questions at this point:
   - Why define a DSL at all for this?
   - Why define a type-level DSL for this?
 
 These will become clearer once we interpret the API spec
-
 -}
 
+{- | Interpreting APIs defined in our DSL as a server
+
+Two main concerns arise when defining a web server:
+- Routing HTTP requests to the correct handler
+- Ensuring that the handler itself is correctly configured, i.e, it has the type expected by the request
+-}
+
+-- | Here is a simplified definition of a server
 serve :: HasServer apiLayout
       => Proxy apiLayout
       -> Server apiLayout -- ^ Handler for API
       -> [String] -- ^ Path in HTTP request
-      -> IO String
+      -> IO String -- ^ No output encoding considered for this example
 serve p handler path =
     case route p handler path of
         Nothing -> error "Error in HTTP request"
         Just s  -> show <$> s
 
-{-| @Server@ type family: this is the key to guaranting correct handler types at compile time!
+{-| @Server@ type family: this is the key to guaranteeing correct handler types at compile time!
 
 - Type family: Functions at the type level to map types to other types
 - In this case, we are dealing with open type families
@@ -140,11 +164,6 @@ type instance Server (Capture a :> b) = a -> Server b
 -- | What about invalid representations of the API? Compiler error because compiler won't be able to compute
 -- the type the @serve@ function should expect
 
--- | Examples of invalid base cases:
--- @Capture Bool@
--- @"get-my" :> "something"@ (but what?)
-
-
 {- | So now we have some clarity on why the DSL is defined at the type-level. Had we defined the DSL at the
 data level, we wouldn't have been able to infer the type of the handler as elegantly (though I imagine we
 could still traverse the AST, and elevate each constructor to a corresponding type)
@@ -159,10 +178,21 @@ hanlder for an API
 
 However, we haven't yet discussed how the server would actually run post compilation. For our server to function
 properly, it must also be able to /route/ requests to the correct handlers. This is where the @HasServer@
-typeclass comes into play: it allows us to map the constructors of our type-level DSL to the correct handler
-by exposing an interface that can be used by the different constructors.
+typeclass comes into play.
 
---}
+To understand how the @HasServer@ works, note the following:
+- routing requires us to simultaneously traverse the
+path in the HTTP request (to know where to look), and the API spec (to verify if what we are looking for
+actually exists)
+- The path of the HTTP request can be traversed using a simple recursive function (since we are
+dealing with a list)
+- However, the API spec itself is a type, so traversing it isn't so simple. This is where
+the @HasServer@ typeclass comes into play; it exposes an interface for routing that can be used by the different
+constructors of our DSL to traverse the API spec! In the process, we get to traverse the HTTP request path for
+free because of the type definition of @route@
+- In practice, this works out because the @route@ function is overloaded, and can be invoked on all the DSL
+constructors for which a @HasServer@ instance has been defined
+-}
 
 -- | Typeclass definition
 class HasServer apiLayout where
@@ -212,7 +242,6 @@ instance (KnownSymbol s, HasServer r) => HasServer ((s :: Symbol) :> r) where
 -- in this case, we attempt to parse the current path componenet of the HTTP request, pass it to the handler,
 -- and continue the routing process; however, if the path in the HTTP request is empty, then the request is
 -- once again malformed, and we throw an error
-
 instance (Read a, HasServer r) => HasServer (Capture a :> r) where
     route :: Proxy (Capture a :> r) -> (a -> Server r) -> [String] -> Maybe (IO String)
     route p handlerR [] = Nothing
