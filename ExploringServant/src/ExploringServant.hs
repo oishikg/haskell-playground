@@ -7,7 +7,19 @@
 {-# LANGUAGE TypeOperators       #-}
 
 module ExploringServant
-  (
+  ( -- * Type-level constructors for DSL
+    Get
+  , (:<|>)
+  , (:>)
+  , Capture
+
+  -- * Definitions for server interpretation of DSL
+  , Server
+  , HasServer (..)
+
+  -- * Example API data
+  , MyWebsiteAPI
+  , myWebsiteAPIHandler
   ) where
 
 import           Control.Applicative
