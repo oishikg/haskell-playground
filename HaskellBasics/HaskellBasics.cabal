@@ -5,7 +5,7 @@ cabal-version:       >=1.10
 -- http://haskell.org/cabal/users-guide/
 
 -- The name of the package.
-name:                MonadsAndTransformers
+name:                HaskellBasics
 
 -- The package version.  See the Haskell package versioning policy (PVP)
 -- for standards guiding when and how versions should be incremented.
@@ -52,7 +52,9 @@ extra-source-files:  CHANGELOG.md
 library
   -- Modules exported by the library.
   exposed-modules:
-    MonadsAndTransformers    
+    EverythingUptoMonads
+    ReaderMonad
+    MonadTransformers
 
   -- Modules included in this library but not exported.
   -- other-modules:

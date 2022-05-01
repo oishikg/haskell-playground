@@ -6,7 +6,7 @@ cabal-version: 1.12
 --
 -- hash: c9428565cf9908a6638732b86d830fecb08f8ec18eb88b3cd8209f47725367c6
 
-name:           continuations-in-haskell
+name:           Problems
 version:        0.1.0.0
 description:    Please see the README on GitHub at <https://github.com/githubuser/continuations-in-haskell#readme>
 homepage:       https://github.com/githubuser/continuations-in-haskell#readme
