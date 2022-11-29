@@ -43,7 +43,7 @@ library
   exposed-modules:
     EverythingUptoMonads
     ReaderMonad
-    MonadTransformers
+    IntroducingMonadTransformers
 
   -- Modules included in this library but not exported.
   -- other-modules:
@@ -52,7 +52,9 @@ library
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:       base >= 4.14.3.0 && <4.15
+  build-depends:
+      base >= 4.14.3.0 && <4.15
+    , transformers
 
   -- Directories containing source files.
   hs-source-dirs:      src
