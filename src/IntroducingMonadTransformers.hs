@@ -200,7 +200,7 @@ newtype Mega a = Mega { runMega :: Int -> Either String (a, Int) }
 -- subclass of functor?
 instance Monad Mega where
     return :: a -> Mega a
-    return a = Mega $ \s -> Right (a, s)
+    return = pure
 
     (>>=) :: Mega a -> (a -> Mega b) -> Mega b
     ma >>= fmb = Mega $ \s0 -> do -- take advantage of Monad instance of Either
@@ -208,7 +208,7 @@ instance Monad Mega where
         runMega (fmb a1) s1
 
 instance Applicative Mega where
-    pure = return
+    pure a = Mega $ \s -> Right (a, s)
     (<*>) = ap
 
 instance Functor Mega where
@@ -243,7 +243,7 @@ newtype ExceptT e m a = ExceptT { runExceptT :: m (Either e a) }
 -- parameterised monad
 instance Monad m => Monad (ExceptT e m) where
     return :: a -> ExceptT e m a
-    return = ExceptT . return . return
+    return = pure
 
     (>>=) :: ExceptT e m a -> (a -> ExceptT e m b) -> ExceptT e m b
     (>>=) (ExceptT mea) aExTmb = ExceptT $ mea >>= \eitherA ->
@@ -252,7 +252,7 @@ instance Monad m => Monad (ExceptT e m) where
             Right a -> runExceptT $ aExTmb a
 
 instance Monad m => Applicative (ExceptT e m) where
-    pure = return
+    pure = ExceptT . return . return
     (<*>) = ap
 
 instance Monad m => Functor (ExceptT e m) where
@@ -271,14 +271,14 @@ newtype StateT s m a = StateT { runStateT :: s -> m (a, s) }
 -- parameterised monad
 instance Monad m => Monad (StateT s m) where
     return :: a -> StateT s m a
-    return val = StateT $ \s -> return (val, s)
+    return = pure
 
     (>>=) :: StateT s m a -> (a -> StateT s m b) -> StateT s m b
     (>>=) (StateT sma) asmb = StateT $ \s0 ->
         sma s0 >>= \(a, s1) -> runStateT (asmb a) s1
 
 instance Monad m => Applicative (StateT s m) where
-    pure  = return
+    pure val  = StateT $ \s -> return (val, s)
     (<*>) = ap
 
 instance Monad m => Functor (StateT s m) where
